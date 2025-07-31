@@ -1,6 +1,7 @@
 use std::cmp::max;
 
 use configparser::ini::Ini;
+use mastodon_async::Data;
 
 pub struct ReturnedCWConfiguration {
     pub enable: bool,
@@ -25,6 +26,43 @@ pub fn read_instance() -> String {
     let config = read_config();
 
     config.get("posting", "instance").unwrap()
+}
+
+pub fn read_mastodon_config() -> Option<Data> {
+    let config = read_config();
+
+    let base = match config.get("mastodon", "base") {
+        Some(a) => a,
+        None => return None,
+    };
+
+    let client_id = match config.get("mastodon", "client_id") {
+        Some(a) => a,
+        None => return None,
+    };
+
+    let client_secret = match config.get("mastodon", "client_secret") {
+        Some(a) => a,
+        None => return None,
+    };
+
+    let token = match config.get("mastodon", "token") {
+        Some(a) => a,
+        None => return None,
+    };
+
+    let redirect = match config.get("mastodon", "redirect") {
+        Some(a) => a,
+        None => return None,
+    };
+
+    Some(Data {
+        base: base.into(),
+        client_id: client_id.into(),
+        client_secret: client_secret.into(),
+        redirect: redirect.into(),
+        token: token.into(),
+    })
 }
 
 pub fn read_cw_config() -> ReturnedCWConfiguration {

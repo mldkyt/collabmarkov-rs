@@ -1,7 +1,7 @@
-use std::{thread::sleep, time::Duration, vec};
+use std::{os::linux::raw::stat, thread::sleep, time::Duration, vec};
 
+use mastodon_async::{Registration, helpers::cli, prelude::*};
 use regex::Regex;
-use reqwest::StatusCode;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
@@ -54,313 +54,76 @@ struct Posts {
     posts: Vec<Post>,
 }
 
-fn get_posts_until_last(user_id: String, last_id: String) -> Vec<Post> {
-    println!("{} Getting posts until last id: {}", user_id, last_id);
-    let instance = read_instance();
-
-    let out = reqwest::blocking::Client::new()
-        .post(format!("https://{}/api/users/notes", instance))
-        .bearer_auth(read_posting_token())
-        .json(&json!({
-            "userId": user_id,
-            "limit": 100,
-            "untilId": last_id,
-            "withRenotes": false,
-            "withBots": false,
-        }))
-        .send()
+pub async fn get_posts(mastodon: &Mastodon, user_id: String) -> Vec<Status> {
+    let mut statuses = mastodon
+        .statuses(&AccountId::new(user_id), Default::default())
+        .await
         .unwrap();
 
-    if out.status() == StatusCode::TOO_MANY_REQUESTS {
-        println!("too many requests for {} retrying...", user_id);
-        sleep(Duration::from_secs(2));
-        return get_posts_until_last(user_id.clone(), last_id.clone());
+    let mut final_statuses: Vec<Status> = vec![];
+
+    for ele in &statuses.initial_items {
+        final_statuses.push(ele.clone());
     }
 
-    let text = match out.text() {
-        Ok(txt) => txt,
-        Err(error) => {
-            println!("{} failed to get text: {}", &user_id, error);
-
-            String::from("")
-        }
-    };
-
-    let mut out: Vec<Post> = match serde_json::from_str(text.as_str()) {
-        Ok(out) => out,
-        Err(error) => {
-            println!("{} failed to parse json: {}", &user_id, error);
-            println!("input string: {}", text);
-            vec![]
-        }
-    };
-
-    match out.last() {
-        Some(last_el) => {
-            let last_id = last_el.id.clone();
-            let mut posts = get_posts_until_last(user_id, last_id);
-
-            out.append(&mut posts);
-        }
-        None => {
-            println!("No posts found");
-        }
-    }
-
-    out
-}
-
-pub fn control_follows_for_user(user_id: &String) {
-    println!("checking if {} is followed", user_id);
-
-    let instance = read_instance();
-    let token = read_posting_token();
-
-    let req = reqwest::blocking::Client::new()
-        .post(format!("https://{}/api/users/relation", instance))
-        .bearer_auth(&token)
-        .json(&json!({
-            "userId": user_id
-        }))
-        .send();
-
-    let req = match req {
-        Ok(a) => a,
-        Err(b) => {
-            println!("Failed to fetch user information for {}", user_id);
-            println!("{:?}", b);
-            return;
-        }
-    };
-
-    if req.status() == StatusCode::TOO_MANY_REQUESTS {
-        println!("too many requests, retrying for {}...", user_id);
-        sleep(Duration::from_secs(1));
-        control_follows_for_user(user_id);
-        return;
-    }
-
-    let req = match req.json::<Vec<UserRelation>>() {
-        Ok(v) => v,
-        Err(_) => {
-            println!("Failed to parse user data for {}", user_id);
-            return;
-        }
-    };
-
-    let req = match req.get(0) {
-        Some(a) => a,
-        None => {
-            println!("No relations for {}", user_id);
-            return;
-        }
-    };
-
-    if req.is_following {
-        println!("{} is already followed", user_id);
-    }
-
-    if req.has_pending_follow_request_from_you {
-        println!("{} is pending a follow request", user_id);
-    }
-
-    if req.is_followed && !req.is_following && !req.has_pending_follow_request_from_you {
-        println!("following {}", user_id);
-
-        let req = reqwest::blocking::Client::new()
-            .post(format!("https://{}/api/following/create", instance))
-            .bearer_auth(token)
-            .json(&json!({
-                "userId": user_id
-            }))
-            .send();
-
-        match req {
-            Ok(_) => println!("Successfully followed {}", user_id),
-            Err(_) => println!("Error following {}", user_id),
-        }
-    }
-}
-
-pub fn get_posts(user_id: String) -> Vec<Post> {
-    println!("Getting posts for {}", user_id);
-
-    let mut posts = Vec::new();
-    let instance = read_instance();
-
-    let req = reqwest::blocking::Client::new()
-        .post(format!("https://{}/api/users/notes", instance))
-        .bearer_auth(read_posting_token())
-        .json(&json!({
-            "userId": user_id,
-            "limit": 100,
-            "withRenotes": false,
-            "withBots": false,
-        }))
-        .send()
-        .unwrap();
-
-    if req.status() == StatusCode::TOO_MANY_REQUESTS {
-        println!("too many requests for {} retrying...", user_id);
-        sleep(Duration::from_secs(2));
-        return get_posts(user_id.clone());
-    }
-
-    match req.json::<Vec<Post>>() {
-        Ok(v) => v.iter().for_each(|post| {
-            posts.push(Post {
-                id: post.id.clone(),
-                text: post.text.clone(),
-                cw: post.cw.clone(),
-                user: User {
-                    id: post.user.id.clone(),
-                    name: post.user.name.clone(),
-                    username: post.user.username.clone(),
-                    host: post.user.host.clone(),
-                    description: post.user.description.clone(),
-                },
-                visibility: post.visibility.clone(),
-            });
-        }),
-        Err(_) => return vec![],
-    }
-
-    if let Some(last_post) = posts.last() {
-        let last_id = last_post.id.clone();
-        let mut posts_2 = get_posts_until_last(user_id.clone(), last_id);
-        posts.append(&mut posts_2);
-    }
-
-    println!("Fetched {} posts for {}", &posts.len(), user_id);
-
-    posts
-}
-
-pub fn get_followers_ids() -> Vec<String> {
-    let mut ids: Vec<UserFollow> = vec![];
-
-    let markov_bot_id = read_poster_id();
-
-    let req = reqwest::blocking::Client::new()
-        .post(format!("https://{}/api/users/followers", read_instance()))
-        .json(&json!({
-            "userId": markov_bot_id,
-            "limit": 100
-        }))
-        .send()
-        .unwrap()
-        .json::<Vec<UserFollow>>()
-        .unwrap();
-
-    for i in req {
-        ids.push(i);
-    }
-
-    let mut last_id = ids.last().unwrap();
-    let mut end_loop = false;
     loop {
-
-        println!(
-            "fetched {} followers so far, last id is \"{}\"",
-            ids.len(),
-            last_id.id
-        );
-
-        let req = reqwest::blocking::Client::new()
-            .post(format!("https://{}/api/users/followers", read_instance()))
-            .json(&json!({
-                "userId": markov_bot_id,
-                "untilId": last_id.id,
-                "limit": 100
-            }))
-            .send();
-
-        let req = match req {
-            Ok(a) => a,
-            Err(b) => {
-                panic!("request failed: {:?}", b);
-            }
-        };
-
-        let req = req.text().unwrap_or_else(|b| {
-            println!("failed to read response: {:?}", b);
-            end_loop = true;
-            String::from("")
-        });
-
-        let req = serde_json::from_str::<Vec<UserFollow>>(&req).unwrap_or_else(|b| {
-            println!("failed to parse json: {:?}", b);
-            println!("original JSON was: {:?}", req);
-            end_loop = true;
-            vec![]
-        });
-
-        for i in req {
-            ids.push(i);
-        }
-
-        if let Some(last_user) = ids.last() {
-            last_id = last_user
-        } else {
-            break;
-        }
-
-        if end_loop {
-            break;
+        match statuses.next_page().await {
+            Ok(statuses) => match statuses {
+                Some(statuses) => {
+                    for ele in &statuses {
+                        final_statuses.push(ele.clone());
+                    }
+                }
+                None => break,
+            },
+            Err(_) => break,
         }
     }
 
-    let mut ids_filtered: Vec<String> = vec![];
-
-    for i in ids {
-        let regex = Regex::new("#[Nn]o[Mm]arkov").unwrap();
-
-        if !regex.is_match(i.follower.description.clone().unwrap_or(String::from("")).as_str()) {
-            ids_filtered.push(i.follower_id.clone());
-        }
-    }
-
-    ids_filtered
+    final_statuses
 }
 
-#[derive(Serialize, Deserialize)]
-pub struct CreatedNote {
-    #[serde(rename = "createdNote")]
-    created_note: Post,
+pub async fn control_follows_for_user(mastodon: &Mastodon, user: &Account) {
+    // yolo
+
+    match mastodon.follow(&user.id).await {
+        Ok(_) => {
+            println!("followed {}", user.acct)
+        }
+        Err(e) => {
+            println!("failed to follow {}: {:?}", user.acct, e)
+        }
+    }
+}
+
+pub async fn get_followers(mastodon: &Mastodon) -> Vec<Account> {
+    let mut me = mastodon.follows_me().await.unwrap();
+
+    let mut accounts: Vec<Account> = vec![];
+
+    for ele in &me.initial_items {
+        accounts.push(ele.clone());
+    }
+
+    loop {
+        match me.next_page().await {
+            Ok(followers) => match followers {
+                Some(followers) => {
+                    for ele in followers {
+                        accounts.push(ele);
+                    }
+                }
+                None => break,
+            },
+            Err(_) => break,
+        }
+    }
+
+    accounts
 }
 
 pub fn create_post(text: String) {
-    let instance = read_instance();
-    let posting_token = read_posting_token();
-
-    let mut sanitized = sanitize_mentions(text.clone());
-    sanitized = sanitize_formatting(sanitized.clone());
-    sanitized = sanitize_hashtags(sanitized.clone());
-    sanitized = remove_mfm(sanitized.clone());
-
-    let visibility = read_visibility();
-
-    let cw_config = read_cw_config();
-
-    let mut json = json!({
-        "text": sanitized,
-        "visibility": visibility
-    });
-
-    if cw_config.enable {
-        json["cw"] = json!(cw_config.cw);
-    }
-
-    let res = reqwest::blocking::Client::new()
-        .post(format!("https://{}/api/notes/create", instance))
-        .bearer_auth(posting_token)
-        .json(&json)
-        .send()
-        .unwrap()
-        .json::<CreatedNote>()
-        .unwrap();
-
-    println!("https://{}/notes/{}", instance, res.created_note.id);
+    todo!("post note");
 }
 
 pub fn remove_mfm(text: String) -> String {
