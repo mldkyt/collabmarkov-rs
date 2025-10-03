@@ -59,7 +59,8 @@ fn get_posts_until_last(user_id: String, last_id: String) -> Vec<Post> {
     let instance = read_instance();
 
     let out = reqwest::blocking::Client::new()
-        .post(format!("https://{}/api/users/notes", instance))
+        .post("http://localhost/api/users/notes")
+        .header("Host", instance)
         .bearer_auth(read_posting_token())
         .json(&json!({
             "userId": user_id,
@@ -121,7 +122,8 @@ pub fn control_follows_for_user(user_id: &String) {
     let token = read_posting_token();
 
     let req = reqwest::blocking::Client::new()
-        .post(format!("https://{}/api/users/relation", instance))
+        .post("http://localhost/api/users/relation")
+        .header("Host", &instance)
         .bearer_auth(&token)
         .json(&json!({
             "userId": user_id
@@ -172,7 +174,8 @@ pub fn control_follows_for_user(user_id: &String) {
         println!("following {}", user_id);
 
         let req = reqwest::blocking::Client::new()
-            .post(format!("https://{}/api/following/create", instance))
+            .post("http://localhost/api/following/create")
+            .header("Host", instance)
             .bearer_auth(token)
             .json(&json!({
                 "userId": user_id
@@ -193,7 +196,8 @@ pub fn get_posts(user_id: String) -> Vec<Post> {
     let instance = read_instance();
 
     let req = reqwest::blocking::Client::new()
-        .post(format!("https://{}/api/users/notes", instance))
+        .post("http://localhost/api/users/notes")
+        .header("Host", instance)
         .bearer_auth(read_posting_token())
         .json(&json!({
             "userId": user_id,
@@ -247,10 +251,12 @@ pub fn get_posts(user_id: String) -> Vec<Post> {
 pub fn get_followers_ids() -> Vec<String> {
     let mut ids: Vec<UserFollow> = vec![];
 
+    let instance = read_instance();
     let markov_bot_id = read_poster_id();
 
     let req = reqwest::blocking::Client::new()
-        .post(format!("https://{}/api/users/followers", read_instance()))
+        .post("http://localhost/api/users/followers")
+        .header("Host", &instance)
         .json(&json!({
             "userId": markov_bot_id,
             "limit": 100
@@ -274,7 +280,8 @@ pub fn get_followers_ids() -> Vec<String> {
         );
 
         let req = reqwest::blocking::Client::new()
-            .post(format!("https://{}/api/users/followers", read_instance()))
+            .post("http://localhost/api/users/followers")
+            .header("Host", read_instance())
             .json(&json!({
                 "userId": markov_bot_id,
                 "untilId": last_id.id,
@@ -365,7 +372,8 @@ pub fn create_post(text: String) {
     }
 
     let res = reqwest::blocking::Client::new()
-        .post(format!("https://{}/api/notes/create", instance))
+        .post("http://localhost/api/notes/create")
+        .header("Host", &instance)
         .bearer_auth(posting_token)
         .json(&json)
         .send()

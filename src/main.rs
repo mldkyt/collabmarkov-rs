@@ -1,4 +1,3 @@
-
 use markov::Chain;
 
 use crate::{
